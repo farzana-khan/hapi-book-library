@@ -4,38 +4,46 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const Joi = require('joi');
+const saltRounds = 10;
 
 const User = require('../models/user.model');
 const Book = require('../models/book.model');
 
 process.env.SECRET_KEY = 'secret';
 
-const schema = {
-    first_name: Joi.string().required(),
-    last_name: Joi.string().required(),
+/*const schema = {
+    first_name: Joi.string(),
+    last_name: Joi.string(),
     email: Joi.string().email({ minDomainAtoms: 2 }).required(),
     password: Joi.string().regex(/^[a-zA-Z0-9]{6,16}$/).min(6).required()
-};
+};*/
 
 module.exports = [
-    //Register user
+    //Register user  
     {
         method: 'POST',
         path: '/register',
+        options: {
+            validate: {
+                payload: {
+                    first_name: Joi.string().alphanum().required(),
+                    last_name: Joi.string().required(),
+                    email: Joi.string().email({ minDomainAtoms: 2 }),
+                    password: Joi.string().regex(/^[a-zA-Z0-9]{3,30}$/)
+                },
+                failAction: (request, h, err) => {
+                    return err.isJoi ? h.response(err.details[0]).takeover() : h.response(err).takeover();
+                }
+            }
+        },
         handler: async function (request, h) {
-            const {error} = Joi.validate(request.payload, schema);
-            if (error) return h.response(error.details[0].message).code(400);
-
-            const user = new User ({
-                first_name: request.payload.first_name,
-                last_name: request.payload.last_name,
-                email: request.payload.email,
-                password: request.payload.password
-            });
             try{
-                const savedUser = await user.save();
-                console.log(savedUser);
-                return h.response('User created!').code(201);
+                
+                let salt = bcrypt.genSaltSync(saltRounds);
+                request.payload.password = bcrypt.hashSync(request.payload.password, salt);
+                let user = new User(request.payload); //req body on hapi
+                let result = await user.save();
+                return h.response(result);
             }
             catch(err){
                 return h.response('User not created').code(500);
@@ -43,40 +51,51 @@ module.exports = [
         }
     },
     
-    //Login user
-    {
-        method: 'POST',
-        path: '/login',
-        handler: async function (request, h) {
-            return User.findOne({
-                email: request.payload.email
-            })
-                .then(user => {
-                    if (user) {
-                        if (bcrypt.compareSync(request.payload.password, user.password)) {
-                            const payload = {
-                                id: user._id,
-                                first_name: user.first_name,
-                                last_name: user.last_name,
-                                email: user.email
-                            }
+   //Log In
+   {
+    method: 'POST',
+    path: '/login',
+    handler: async function (request, h) {
 
-                            let token = jwt.sign(payload, process.env.SECRET_KEY, { expiresIn: 1440 })
-                            return token;
-                        }
-                        else {
-                            return h.response('User does not exist!').code(404);
-                        }
-                    }
-                    else {
-                        return h.response('User does not exist!').code(404);
-                    }
-                })
-                .catch(err => {
-                    return h.response(err).code(500);
-                })
+        let message = 'Invalid username or password';
+
+        const { email, password } = request.payload;
+        if (!email || !password) {
+            return h.response(message);
         }
-    },
+        return User.findOne({
+            email: request.payload.email
+        })
+        .then(user => {
+            if (user) {
+                //return user
+                if (bcrypt.compare(request.payload.password, user.password)) {
+                    //return true
+                    const payload = {
+                        id: user._id,
+                        first_name: user.first_name,
+                        last_name: user.last_name,
+                        email: user.email
+                    }
+                    console.log(payload)
+
+                    let token = jwt.sign(payload, process.env.SECRET_KEY, { expiresIn: 1440 })
+                    console.log(token)
+                    return token;
+                }
+                else {
+                    return { error: 'User does not exist' }
+                }
+            }
+            else {
+                return { error: 'User does not exist' }
+            }
+        })
+        .catch(err => {
+            return { error: err }
+        })
+    }
+},
     
     //Add user
     {
